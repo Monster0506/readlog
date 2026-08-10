@@ -1,0 +1,55 @@
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  SITE_URL: https://monster0506.github.io/readlog
+  BASE_PATH: /readlog
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build links feed
+        run: |
+          uv run scripts/build_feed.py _pages --type link \
+            --site-url "$SITE_URL" --base-path "$BASE_PATH" \
+            --title "readlog: links" --description "Atomic links" \
+            -o dist/feed-links.xml
+
+      - name: Build roundups feed
+        run: |
+          uv run scripts/build_feed.py _pages --type roundup \
+            --site-url "$SITE_URL" --base-path "$BASE_PATH" \
+            --title "readlog: weekly roundup" --description "A weekly digest of everything I read." \
+            -o dist/feed-roundups.xml
+
+      - uses: Monster0506/staticsitegenerator@main
+        with:
+          base-path: ${{ env.BASE_PATH }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
