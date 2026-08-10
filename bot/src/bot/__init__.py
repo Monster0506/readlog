@@ -163,6 +163,7 @@ class ReadlogClient(discord.Client):
     def __init__(self, *, config: BotConfig, intents: discord.Intents) -> None:
         super().__init__(intents=intents)
         self.config = config
+        self._publish_lock = asyncio.Lock()
 
     async def on_ready(self) -> None:
         logger.info("logged in as %s (%s)", self.user, getattr(self.user, "id", "?"))
@@ -189,15 +190,16 @@ class ReadlogClient(discord.Client):
         entries = list(zip(pending, titles))
         date = message.created_at.strftime("%Y-%m-%d")
 
-        published = await asyncio.to_thread(
-            publish_links,
-            self.config.repo_dir,
-            entries,
-            date=date,
-            message_id=message.id,
-            jump_url=message.jump_url,
-            body=message.content,
-        )
+        async with self._publish_lock:
+            published = await asyncio.to_thread(
+                publish_links,
+                self.config.repo_dir,
+                entries,
+                date=date,
+                message_id=message.id,
+                jump_url=message.jump_url,
+                body=message.content,
+            )
 
         if not published:
             await message.add_reaction(REACTION_ERROR)
