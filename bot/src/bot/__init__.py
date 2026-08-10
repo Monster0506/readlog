@@ -104,10 +104,16 @@ def _push_with_rebase_retry(repo_dir: Path) -> bool:
 
 def commit_and_push(repo_dir: Path, paths: list[Path], message: str) -> bool:
     _run_git(repo_dir, "add", "--", *(str(p) for p in paths))
-    commit = _run_git(repo_dir, "commit", "-m", message)
-    if commit.returncode != 0:
-        logger.error("git commit failed: %s", _describe(commit))
-        return False
+
+    has_staged_changes = _run_git(repo_dir, "diff", "--cached", "--quiet").returncode != 0
+    if has_staged_changes:
+        commit = _run_git(repo_dir, "commit", "-m", message)
+        if commit.returncode != 0:
+            logger.error("git commit failed: %s", _describe(commit))
+            return False
+    else:
+        logger.info("no staged changes for %r; pushing any pending local commits", message)
+
     return _push_with_rebase_retry(repo_dir)
 
 
