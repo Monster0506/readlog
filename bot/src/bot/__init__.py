@@ -68,12 +68,17 @@ async def fetch_title(session: aiohttp.ClientSession, url: str) -> TitleResult:
             raw = await resp.content.read(TITLE_FETCH_READ_LIMIT)
             text = raw.decode(resp.charset or "utf-8", errors="replace")
     except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError) as exc:
-        logger.debug("title fetch failed for %s: %s", url, exc)
+        logger.warning("title fetch failed for %s: %s", url, exc)
         return TitleResult(url, False)
 
     match = TITLE_RE.search(text)
     title = html.unescape(match.group(1)).strip() if match else ""
-    return TitleResult(title, True) if title else TitleResult(url, False)
+    if not title:
+        logger.warning("no <title> found for %s", url)
+        return TitleResult(url, False)
+
+    logger.info("title for %s: %r", url, title)
+    return TitleResult(title, True)
 
 
 def _run_git(repo_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -180,12 +185,17 @@ class ReadlogClient(discord.Client):
         if not isinstance(message.channel, discord.DMChannel):
             return
 
+        logger.info("incoming DM %s from %s: %r", message.id, message.author, message.content)
+
         urls = URL_RE.findall(message.content)
         if not urls:
+            logger.info("ignoring %s: no links found", message.id)
             return
+        logger.info("message %s: found %d link(s): %s", message.id, len(urls), urls)
 
         pending = pending_links_for(self.config.pages_dir, message.id, urls)
         if not pending:
+            logger.info("message %s: all link(s) already captured, skipping", message.id)
             return
 
         self.config.pages_dir.mkdir(parents=True, exist_ok=True)
@@ -208,10 +218,14 @@ class ReadlogClient(discord.Client):
             )
 
         if not published:
+            logger.warning("message %s: publish failed, reacting with error", message.id)
             await message.add_reaction(REACTION_ERROR)
             return
 
         any_title_missing = any(not result.found for _, result in entries)
+        logger.info(
+            "message %s: published %d post(s) (title_missing=%s)", message.id, len(entries), any_title_missing
+        )
         await message.add_reaction(REACTION_TITLE_MISSING if any_title_missing else REACTION_SUCCESS)
 
 
