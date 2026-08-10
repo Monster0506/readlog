@@ -45,6 +45,7 @@ class TitleResult(NamedTuple):
 class PendingLink:
     path: Path
     url: str
+    body: str
 
 
 def find_repo_root(start: Path) -> Path:
@@ -145,7 +146,6 @@ def publish_links(
     date: str,
     message_id: int,
     jump_url: str,
-    body: str,
 ) -> bool:
     for pending, result in entries:
         write_post(
@@ -155,7 +155,7 @@ def publish_links(
             url=pending.url,
             message_id=message_id,
             jump_url=jump_url,
-            body=body,
+            body=pending.body,
         )
     paths = [pending.path for pending, _ in entries]
     return commit_and_push(repo_dir, paths, f"add {len(paths)} link(s) from message {message_id}")
@@ -169,11 +169,16 @@ async def react(message: discord.Message, emoji: str, reason: str) -> None:
         logger.error("message %s: failed to add reaction %s: %s", message.id, emoji, exc)
 
 
-def pending_links_for(pages_dir: Path, message_id: int, urls: list[str]) -> list[PendingLink]:
-    single = len(urls) == 1
+def extract_url_lines(content: str) -> list[tuple[str, str]]:
+    """One (url, source_line) pair per URL, so each post's body is only its own line."""
+    return [(url, line.strip()) for line in content.splitlines() for url in URL_RE.findall(line)]
+
+
+def pending_links_for(pages_dir: Path, message_id: int, url_lines: list[tuple[str, str]]) -> list[PendingLink]:
+    single = len(url_lines) == 1
     candidates = (
-        PendingLink(path=pages_dir / f"{message_id}{'' if single else f'-{i}'}.md", url=url)
-        for i, url in enumerate(urls)
+        PendingLink(path=pages_dir / f"{message_id}{'' if single else f'-{i}'}.md", url=url, body=body)
+        for i, (url, body) in enumerate(url_lines)
     )
     return [link for link in candidates if not link.path.exists()]
 
@@ -195,13 +200,13 @@ class ReadlogClient(discord.Client):
 
         logger.info("incoming DM %s from %s: %r", message.id, message.author, message.content)
 
-        urls = URL_RE.findall(message.content)
-        if not urls:
+        url_lines = extract_url_lines(message.content)
+        if not url_lines:
             logger.info("ignoring %s: no links found", message.id)
             return
-        logger.info("message %s: found %d link(s): %s", message.id, len(urls), urls)
+        logger.info("message %s: found %d link(s): %s", message.id, len(url_lines), [u for u, _ in url_lines])
 
-        pending = pending_links_for(self.config.pages_dir, message.id, urls)
+        pending = pending_links_for(self.config.pages_dir, message.id, url_lines)
         if not pending:
             logger.info("message %s: all link(s) already captured, skipping", message.id)
             return
@@ -222,7 +227,6 @@ class ReadlogClient(discord.Client):
                 date=date,
                 message_id=message.id,
                 jump_url=message.jump_url,
-                body=message.content,
             )
 
         if not published:
