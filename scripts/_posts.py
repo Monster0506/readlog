@@ -36,6 +36,7 @@ class Post:
     permalink: str
     description: str
     short_name: str
+    post_type: str
 
 
 def parse_post(path: Path, *, site_url: str, base_path: str) -> Post | None:
@@ -62,14 +63,18 @@ def parse_post(path: Path, *, site_url: str, base_path: str) -> Post | None:
         permalink=permalink_for(short_name, site_url=site_url, base_path=base_path),
         description=body,
         short_name=short_name,
+        post_type=str(frontmatter.get("type") or "link"),
     )
 
 
-def load_posts(pages_dir: Path, *, site_url: str, base_path: str) -> list[Post]:
+def load_posts(
+    pages_dir: Path, *, site_url: str, base_path: str, types: set[str] | None = None
+) -> list[Post]:
     posts = [
         post
         for path in sorted(pages_dir.glob("*.md"))
         if (post := parse_post(path, site_url=site_url, base_path=base_path)) is not None
+        and (types is None or post.post_type in types)
     ]
     posts.sort(key=lambda p: (p.date, p.message_id), reverse=True)
     return posts
