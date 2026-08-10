@@ -40,7 +40,7 @@ jobs:
             --title "readlog: weekly roundup" --description "A weekly digest of everything I read." \
             -o dist/feed-roundups.xml
 
-      - uses: Monster0506/staticsitegenerator@main
+      - uses: Monster0506/static-site-generator@main
         with:
           base-path: ${{ env.BASE_PATH }}
 
