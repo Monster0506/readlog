@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SITE_URL: https://monster0506.github.io/readlog
+  SITE_URL: https://monster0506.github.io
   BASE_PATH: /readlog
 
 jobs:
@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: astral-sh/setup-uv@v5
 
