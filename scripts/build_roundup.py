@@ -21,15 +21,20 @@ def format_week_title(start: date, end: date) -> str:
     return f"Week of {start.strftime('%b')} {start.day} - {end.strftime('%b')} {end.day}, {end.year}"
 
 
+def end_of_day(epoch: int) -> int:
+    day_start = epoch - (epoch % 86400)
+    return day_start + 23 * 3600 + 59 * 60
+
+
 def render_roundup(posts: list[Post], *, start: date, end: date) -> str:
     lines = [f"- [{post.title}]({post.permalink})" + (f" - {post.description}" if post.description else "") for post in posts]
 
-    end_epoch = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp())
+    roundup_epoch = end_of_day(max(post.epoch for post in posts))
     frontmatter = (
         "+++\n"
         'type="roundup"\n'
         f'title="{format_week_title(start, end)}"\n'
-        f"date={end_epoch}\n"
+        f"date={roundup_epoch}\n"
         "+++\n\n"
     )
     return frontmatter + "\n".join(lines) + "\n"
