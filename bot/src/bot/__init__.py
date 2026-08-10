@@ -161,6 +161,14 @@ def publish_links(
     return commit_and_push(repo_dir, paths, f"add {len(paths)} link(s) from message {message_id}")
 
 
+async def react(message: discord.Message, emoji: str, reason: str) -> None:
+    logger.info("message %s: reacting %s (%s)", message.id, emoji, reason)
+    try:
+        await message.add_reaction(emoji)
+    except discord.HTTPException as exc:
+        logger.error("message %s: failed to add reaction %s: %s", message.id, emoji, exc)
+
+
 def pending_links_for(pages_dir: Path, message_id: int, urls: list[str]) -> list[PendingLink]:
     single = len(urls) == 1
     candidates = (
@@ -218,15 +226,14 @@ class ReadlogClient(discord.Client):
             )
 
         if not published:
-            logger.warning("message %s: publish failed, reacting with error", message.id)
-            await message.add_reaction(REACTION_ERROR)
+            await react(message, REACTION_ERROR, "publish failed")
             return
 
         any_title_missing = any(not result.found for _, result in entries)
         logger.info(
             "message %s: published %d post(s) (title_missing=%s)", message.id, len(entries), any_title_missing
         )
-        await message.add_reaction(REACTION_TITLE_MISSING if any_title_missing else REACTION_SUCCESS)
+        await react(message, REACTION_TITLE_MISSING if any_title_missing else REACTION_SUCCESS, "published")
 
 
 def main() -> None:
