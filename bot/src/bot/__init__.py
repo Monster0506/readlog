@@ -170,8 +170,20 @@ async def react(message: discord.Message, emoji: str, reason: str) -> None:
 
 
 def extract_url_lines(content: str) -> list[tuple[str, str]]:
-    """One (url, source_line) pair per URL, so each post's body is only its own line."""
-    return [(url, line.strip()) for line in content.splitlines() for url in URL_RE.findall(line)]
+    entries: list[tuple[str, list[str]]] = []
+    current: list[str] | None = None
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            current = None
+            continue
+        urls = URL_RE.findall(line)
+        if urls:
+            current = [line]
+            entries.extend((url, current) for url in urls)
+        elif current is not None:
+            current.append(line)
+    return [(url, "\n".join(body_lines)) for url, body_lines in entries]
 
 
 def pending_links_for(pages_dir: Path, message_id: int, url_lines: list[tuple[str, str]]) -> list[PendingLink]:
