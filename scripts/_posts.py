@@ -31,12 +31,30 @@ def permalink_for(short_name: str, *, site_url: str, base_path: str) -> str:
 class Post:
     title: str
     date: date_cls
+    epoch: int
     message_id: str
     url: str | None
     permalink: str
     description: str
     short_name: str
     post_type: str
+
+
+def parse_date(raw_date: object) -> tuple[date_cls, int]:
+    """Accepts a bare TOML integer (epoch seconds, current format) or a
+    quoted/native date (legacy). Falls back to now if missing/unrecognized."""
+    if isinstance(raw_date, bool):
+        pass
+    elif isinstance(raw_date, int):
+        return datetime.fromtimestamp(raw_date, tz=timezone.utc).date(), raw_date
+    elif isinstance(raw_date, datetime):
+        return raw_date.date(), int(raw_date.replace(tzinfo=raw_date.tzinfo or timezone.utc).timestamp())
+    elif isinstance(raw_date, date_cls):
+        epoch = int(datetime(raw_date.year, raw_date.month, raw_date.day, tzinfo=timezone.utc).timestamp())
+        return raw_date, epoch
+
+    now = datetime.now(timezone.utc)
+    return now.date(), int(now.timestamp())
 
 
 def parse_post(path: Path, *, site_url: str, base_path: str) -> Post | None:
@@ -50,14 +68,14 @@ def parse_post(path: Path, *, site_url: str, base_path: str) -> Post | None:
     frontmatter = tomllib.loads(content[start + len(FRONTMATTER_DELIM) : end])
     body = content[end + len(FRONTMATTER_DELIM) :].strip()
 
-    raw_date = frontmatter.get("date")
-    post_date = raw_date if isinstance(raw_date, date_cls) else datetime.now(timezone.utc).date()
+    post_date, epoch = parse_date(frontmatter.get("date"))
 
     short_name = path.stem
 
     return Post(
         title=str(frontmatter.get("title") or short_name),
         date=post_date,
+        epoch=epoch,
         message_id=str(frontmatter.get("message_id") or short_name),
         url=frontmatter.get("url"),
         permalink=permalink_for(short_name, site_url=site_url, base_path=base_path),
@@ -76,5 +94,5 @@ def load_posts(
         if (post := parse_post(path, site_url=site_url, base_path=base_path)) is not None
         and (types is None or post.post_type in types)
     ]
-    posts.sort(key=lambda p: (p.date, p.message_id), reverse=True)
+    posts.sort(key=lambda p: (p.epoch, p.message_id), reverse=True)
     return posts

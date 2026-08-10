@@ -124,13 +124,13 @@ def commit_and_push(repo_dir: Path, paths: list[Path], message: str) -> bool:
 
 
 def write_post(
-    path: Path, *, title: str, date: str, url: str, message_id: int, jump_url: str, body: str
+    path: Path, *, title: str, epoch: int, url: str, message_id: int, jump_url: str, body: str
 ) -> None:
     frontmatter = (
         "+++\n"
         'type="link"\n'
         f'title="{escape_toml_string(title)}"\n'
-        f'date="{date}"\n'
+        f"date={epoch}\n"
         f'url="{escape_toml_string(url)}"\n'
         f'message_id="{message_id}"\n'
         f'jump_url="{escape_toml_string(jump_url)}"\n'
@@ -143,7 +143,7 @@ def publish_links(
     repo_dir: Path,
     entries: list[tuple[PendingLink, TitleResult]],
     *,
-    date: str,
+    epoch: int,
     message_id: int,
     jump_url: str,
 ) -> bool:
@@ -151,7 +151,7 @@ def publish_links(
         write_post(
             pending.path,
             title=result.title,
-            date=date,
+            epoch=epoch,
             url=pending.url,
             message_id=message_id,
             jump_url=jump_url,
@@ -217,14 +217,14 @@ class ReadlogClient(discord.Client):
             titles = await asyncio.gather(*(fetch_title(session, link.url) for link in pending))
 
         entries = list(zip(pending, titles))
-        date = message.created_at.strftime("%Y-%m-%d")
+        epoch = int(message.created_at.timestamp())
 
         async with self._publish_lock:
             published = await asyncio.to_thread(
                 publish_links,
                 self.config.repo_dir,
                 entries,
-                date=date,
+                epoch=epoch,
                 message_id=message.id,
                 jump_url=message.jump_url,
             )

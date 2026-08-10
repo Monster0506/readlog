@@ -12,7 +12,7 @@ from _posts import Post, load_posts
 def render_feed(posts: list[Post], *, title: str, site_url: str, base_path: str, description: str) -> str:
     items = []
     for post in posts:
-        pub_date = datetime(post.date.year, post.date.month, post.date.day, tzinfo=timezone.utc)
+        pub_date = datetime.fromtimestamp(post.epoch, tz=timezone.utc)
         items.append(
             "<item>"
             f"<title>{escape(post.title)}</title>"

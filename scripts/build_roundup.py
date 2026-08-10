@@ -24,11 +24,12 @@ def format_week_title(start: date, end: date) -> str:
 def render_roundup(posts: list[Post], *, start: date, end: date) -> str:
     lines = [f"- [{post.title}]({post.permalink})" + (f" - {post.description}" if post.description else "") for post in posts]
 
+    end_epoch = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp())
     frontmatter = (
         "+++\n"
         'type="roundup"\n'
         f'title="{format_week_title(start, end)}"\n'
-        f'date="{end.isoformat()}"\n'
+        f"date={end_epoch}\n"
         "+++\n\n"
     )
     return frontmatter + "\n".join(lines) + "\n"
@@ -61,7 +62,7 @@ def main() -> int:
 
     all_posts = load_posts(args.pages_dir, site_url=args.site_url, base_path=args.base_path, types={"link"})
     week_posts = [p for p in all_posts if start <= p.date <= end]
-    week_posts.sort(key=lambda p: (p.date, p.message_id))
+    week_posts.sort(key=lambda p: (p.epoch, p.message_id))
 
     if not week_posts:
         print(f"No links captured for {start.isoformat()}..{end.isoformat()}; skipping roundup.")
