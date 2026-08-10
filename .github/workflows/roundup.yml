@@ -1,0 +1,43 @@
+name: Weekly roundup
+
+on:
+  schedule:
+    - cron: "5 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      week_start:
+        description: "Override week start."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  SITE_URL: https://monster0506.github.io/readlog
+  BASE_PATH: /readlog
+
+jobs:
+  build-roundup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build roundup
+        env:
+          WEEK_START: ${{ inputs.week_start }}
+        run: |
+          if [ -n "$WEEK_START" ]; then
+            uv run scripts/build_roundup.py --site-url "$SITE_URL" --base-path "$BASE_PATH" --week-start "$WEEK_START"
+          else
+            uv run scripts/build_roundup.py --site-url "$SITE_URL" --base-path "$BASE_PATH"
+          fi
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "Monster0506"
+          git config user.email "tjraklovits@gmail.com"
+          git add _pages
+          git diff --cached --quiet || (git commit -m "weekly roundup" && git push)
