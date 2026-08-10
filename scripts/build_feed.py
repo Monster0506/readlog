@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 from _posts import Post, load_posts
 
 
-def render_feed(posts: list[Post], *, title: str, site_url: str, description: str) -> str:
+def render_feed(posts: list[Post], *, title: str, site_url: str, base_path: str, description: str) -> str:
     items = []
     for post in posts:
         pub_date = datetime(post.date.year, post.date.month, post.date.day, tzinfo=timezone.utc)
@@ -28,7 +28,7 @@ def render_feed(posts: list[Post], *, title: str, site_url: str, description: st
         '<rss version="2.0">\n'
         "<channel>"
         f"<title>{escape(title)}</title>"
-        f"<link>{escape(site_url)}</link>"
+        f"<link>{escape(site_url + base_path)}</link>"
         f"<description>{escape(description)}</description>"
         + "".join(items)
         + "</channel>\n</rss>\n"
@@ -51,7 +51,9 @@ def main() -> int:
         return 1
 
     posts = load_posts(args.pages_dir, site_url=args.site_url, base_path=args.base_path, types={args.post_type})
-    feed_xml = render_feed(posts, title=args.title, site_url=args.site_url, description=args.description)
+    feed_xml = render_feed(
+        posts, title=args.title, site_url=args.site_url, base_path=args.base_path, description=args.description
+    )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(feed_xml, encoding="utf-8")
