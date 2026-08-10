@@ -20,6 +20,8 @@ env:
 jobs:
   build-roundup:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,8 +38,24 @@ jobs:
           fi
 
       - name: Commit and push if changed
+        id: commit
         run: |
           git config user.name "Monster0506"
           git config user.email "tjraklovits@gmail.com"
           git add _pages
-          git diff --cached --quiet || (git commit -m "weekly roundup" && git push)
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "weekly roundup"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: build-roundup
+    if: needs.build-roundup.outputs.changed == 'true'
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
