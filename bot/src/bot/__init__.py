@@ -33,7 +33,7 @@ logger = logging.getLogger("readlog.bot")
 class BotConfig:
     owner_id: int
     repo_dir: Path
-    links_dir: Path
+    pages_dir: Path
 
 
 class TitleResult(NamedTuple):
@@ -116,6 +116,7 @@ def write_post(
 ) -> None:
     frontmatter = (
         "+++\n"
+        'type="link"\n'
         f'title="{escape_toml_string(title)}"\n'
         f'date="{date}"\n'
         f'url="{escape_toml_string(url)}"\n'
@@ -149,10 +150,10 @@ def publish_links(
     return commit_and_push(repo_dir, paths, f"add {len(paths)} link(s) from message {message_id}")
 
 
-def pending_links_for(links_dir: Path, message_id: int, urls: list[str]) -> list[PendingLink]:
+def pending_links_for(pages_dir: Path, message_id: int, urls: list[str]) -> list[PendingLink]:
     single = len(urls) == 1
     candidates = (
-        PendingLink(path=links_dir / f"{message_id}{'' if single else f'-{i}'}.md", url=url)
+        PendingLink(path=pages_dir / f"{message_id}{'' if single else f'-{i}'}.md", url=url)
         for i, url in enumerate(urls)
     )
     return [link for link in candidates if not link.path.exists()]
@@ -176,11 +177,11 @@ class ReadlogClient(discord.Client):
         if not urls:
             return
 
-        pending = pending_links_for(self.config.links_dir, message.id, urls)
+        pending = pending_links_for(self.config.pages_dir, message.id, urls)
         if not pending:
             return
 
-        self.config.links_dir.mkdir(parents=True, exist_ok=True)
+        self.config.pages_dir.mkdir(parents=True, exist_ok=True)
 
         async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
             titles = await asyncio.gather(*(fetch_title(session, link.url) for link in pending))
@@ -213,7 +214,7 @@ def main() -> None:
         sys.exit(1)
 
     repo_dir = find_repo_root(Path(__file__).resolve().parent)
-    config = BotConfig(owner_id=OWNER_ID, repo_dir=repo_dir, links_dir=repo_dir / "_pages" / "links")
+    config = BotConfig(owner_id=OWNER_ID, repo_dir=repo_dir, pages_dir=repo_dir / "_pages")
 
     intents = discord.Intents.default()
     intents.message_content = True
