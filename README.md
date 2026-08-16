@@ -1,10 +1,8 @@
 # readlog
 
-readlog is a personal reading log. You send the bot a link by DM. The link appears on [monster0506.github.io/readlog](https://monster0506.github.io/readlog) with a title, an RSS entry, and a place in a weekly roundup.
+You send the bot a link by DM. The bot reads the page title, then writes a Markdown post into `_pages/`. The bot commits the post and pushes it to `main`. Each push makes GitHub Actions rebuild the RSS feeds and the static site, then deploy it to GitHub Pages. Every Monday, a separate workflow adds the past week's links to a roundup post and deploys again.
 
 ## How it works
-
-You send the bot a link by DM. The bot reads the page title, then writes a Markdown post into `_pages/`. The bot commits the post and pushes it to `main`. Each push makes GitHub Actions rebuild the RSS feeds and the static site, then deploy it to GitHub Pages. Every Monday, a separate workflow adds the past week's links to a roundup post and deploys again.
 
 1. **`bot/`** - A Discord client that watches DMs from one owner ID. When a message contains a link, the bot reads the title and writes a Markdown post under `_pages/`. The bot commits the post and pushes it to `main`. The bot adds an emoji to the message: a check mark for success, a warning sign for no title, or an X for failure.
 2. **`_pages/`** - The content of the site. Each post has TOML frontmatter (`+++ ... +++`) and a body. The `type` field is `link` for a single link or `roundup` for a weekly digest.
