@@ -188,6 +188,8 @@ def append_note(path: Path, note: str) -> None:
 def publish_note(repo_dir: Path, paths: list[Path], note: str, *, message_id: int) -> bool:
     for path in paths:
         append_note(path, note)
+        if is_managed(path):
+            write_flags(path, {"replied": True, "unlisted": False})
     return commit_and_push(repo_dir, paths, f"add note from message {message_id}")
 
 
@@ -204,27 +206,26 @@ def is_managed(path: Path) -> bool:
     return metadata.get("type") == "link" and "unlisted" in metadata
 
 
+def write_flags(path: Path, flags: dict[str, bool]) -> None:
+    content = path.read_text(encoding="utf-8")
+    opening, frontmatter, body = content.split("+++\n", 2)
+    for key, value in flags.items():
+        line = f"{key}={str(value).lower()}"
+        frontmatter, count = re.subn(rf"(?m)^{key}[ \t]*=[^\n]*$", line, frontmatter, count=1)
+        if not count:
+            frontmatter += f"{line}\n"
+    path.write_text(f"{opening}+++\n{frontmatter}+++\n{body}", encoding="utf-8", newline="\n")
+
 
 def set_listing(paths: list[Path], listing: Listing) -> list[Path]:
     changed = []
     for path in paths:
         if not is_managed(path):
             continue
-        metadata = post_metadata(path)
-        if metadata["unlisted"] is listing.value:
+        if post_metadata(path)["unlisted"] is listing.value:
             continue
 
-        content = path.read_text(encoding="utf-8")
-        opening, frontmatter, body = content.split("+++\n", 2)
-        frontmatter = re.sub(
-            r"(?m)^unlisted[ \t]*=[^\n]*$",
-            f"unlisted={str(listing.value).lower()}",
-            frontmatter,
-            count=1,
-        )
-        path.write_text(
-            f"{opening}+++\n{frontmatter}+++\n{body}", encoding="utf-8", newline="\n"
-        )
+        write_flags(path, {"unlisted": listing.value})
         changed.append(path)
     return changed
 
@@ -233,6 +234,12 @@ def listing_for(message: discord.Message) -> Listing:
     if any(reaction.count > int(reaction.me) for reaction in message.reactions):
         return Listing.HOME
     return Listing.ALL_ONLY
+
+
+def resolve_listing(message: discord.Message, paths: list[Path]) -> Listing:
+    if any(post_metadata(path).get("replied") is True for path in paths):
+        return Listing.HOME
+    return listing_for(message)
 
 
 async def react(message: discord.Message, emoji: str, reason: str) -> None:
@@ -354,6 +361,7 @@ class ReadlogClient(discord.Client):
             logger.info("message %s: empty reply to %s, ignoring", message.id, ref.message_id)
             return True
 
+        managed = any(is_managed(path) for path in paths)
         async with self._publish_lock:
             published = await asyncio.to_thread(
                 publish_note, self.config.repo_dir, paths, note, message_id=message.id
@@ -365,6 +373,16 @@ class ReadlogClient(discord.Client):
 
         logger.info("message %s: added note to %d post(s) of %s", message.id, len(paths), ref.message_id)
         await react(message, REACTION_SUCCESS, "note added")
+        if not managed:
+            return True
+
+        try:
+            original = await message.channel.fetch_message(ref.message_id)
+        except discord.HTTPException as exc:
+            logger.error("message %s: failed to read original %s: %s", message.id, ref.message_id, exc)
+            return True
+
+        await self._set_marker(original, Listing.HOME)
         return True
 
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
@@ -395,7 +413,7 @@ class ReadlogClient(discord.Client):
                 if message.author.id != self.config.owner_id:
                     return
 
-                listing = listing_for(message)
+                listing = resolve_listing(message, paths)
                 changed = await asyncio.to_thread(set_listing, paths, listing)
                 if changed:
                     published = await asyncio.to_thread(
@@ -446,7 +464,7 @@ class ReadlogClient(discord.Client):
                 ):
                     if message.author.id != self.config.owner_id or message.id not in managed:
                         continue
-                    listing = listing_for(message)
+                    listing = await asyncio.to_thread(resolve_listing, message, managed[message.id])
                     changed.extend(await asyncio.to_thread(set_listing, managed[message.id], listing))
                     synced.append((message, listing))
             except discord.HTTPException as exc:
