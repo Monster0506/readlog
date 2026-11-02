@@ -7,7 +7,9 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
 
@@ -46,6 +48,11 @@ class PendingLink:
     path: Path
     url: str
     body: str
+
+
+class Listing(Enum):
+    HOME = False
+    ALL_ONLY = True
 
 
 def find_repo_root(start: Path) -> Path:
@@ -124,11 +131,13 @@ def commit_and_push(repo_dir: Path, paths: list[Path], message: str) -> bool:
 
 
 def write_post(
-    path: Path, *, title: str, epoch: int, url: str, message_id: int, jump_url: str, body: str
+    path: Path, *, title: str, epoch: int, url: str, message_id: int, jump_url: str, body: str,
+    listing: Listing = Listing.ALL_ONLY,
 ) -> None:
     frontmatter = (
         "+++\n"
         'type="link"\n'
+        f"unlisted={str(listing.value).lower()}\n"
         f'title="{escape_toml_string(title)}"\n'
         f"date={epoch}\n"
         f'url="{escape_toml_string(url)}"\n'
@@ -146,6 +155,7 @@ def publish_links(
     epoch: int,
     message_id: int,
     jump_url: str,
+    listing: Listing,
 ) -> bool:
     for pending, result in entries:
         write_post(
@@ -156,6 +166,7 @@ def publish_links(
             message_id=message_id,
             jump_url=jump_url,
             body=pending.body,
+            listing=listing,
         )
     paths = [pending.path for pending, _ in entries]
     return commit_and_push(repo_dir, paths, f"add {len(paths)} link(s) from message {message_id}")
@@ -177,6 +188,44 @@ def publish_note(repo_dir: Path, paths: list[Path], note: str, *, message_id: in
     for path in paths:
         append_note(path, note)
     return commit_and_push(repo_dir, paths, f"add note from message {message_id}")
+
+
+def post_metadata(path: Path) -> dict:
+    content = path.read_text(encoding="utf-8")
+    parts = content.split("+++\n", 2)
+    if len(parts) != 3:
+        return {}
+    return tomllib.loads(parts[1])
+
+
+def set_listing(paths: list[Path], listing: Listing) -> list[Path]:
+    changed = []
+    for path in paths:
+        metadata = post_metadata(path)
+        if metadata.get("type") != "link" or "unlisted" not in metadata:
+            continue
+        if metadata["unlisted"] is listing.value:
+            continue
+
+        content = path.read_text(encoding="utf-8")
+        opening, frontmatter, body = content.split("+++\n", 2)
+        frontmatter = re.sub(
+            r"(?m)^unlisted[ \t]*=[^\n]*$",
+            f"unlisted={str(listing.value).lower()}",
+            frontmatter,
+            count=1,
+        )
+        path.write_text(
+            f"{opening}+++\n{frontmatter}+++\n{body}", encoding="utf-8", newline="\n"
+        )
+        changed.append(path)
+    return changed
+
+
+def listing_for(message: discord.Message) -> Listing:
+    if any(reaction.count > int(reaction.me) for reaction in message.reactions):
+        return Listing.HOME
+    return Listing.ALL_ONLY
 
 
 async def react(message: discord.Message, emoji: str, reason: str) -> None:
@@ -221,6 +270,7 @@ class ReadlogClient(discord.Client):
 
     async def on_ready(self) -> None:
         logger.info("logged in as %s (%s)", self.user, getattr(self.user, "id", "?"))
+        await self._sync_listings()
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.id != self.config.owner_id:
@@ -253,6 +303,13 @@ class ReadlogClient(discord.Client):
         epoch = int(message.created_at.timestamp())
 
         async with self._publish_lock:
+            try:
+                current = await message.channel.fetch_message(message.id)
+            except discord.HTTPException as exc:
+                logger.error("message %s: failed to read reactions: %s", message.id, exc)
+                await react(message, REACTION_ERROR, "reaction lookup failed")
+                return
+
             published = await asyncio.to_thread(
                 publish_links,
                 self.config.repo_dir,
@@ -260,6 +317,7 @@ class ReadlogClient(discord.Client):
                 epoch=epoch,
                 message_id=message.id,
                 jump_url=message.jump_url,
+                listing=listing_for(current),
             )
 
         if not published:
@@ -299,6 +357,82 @@ class ReadlogClient(discord.Client):
         await react(message, REACTION_SUCCESS, "note added")
         return True
 
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.user_id == self.config.owner_id:
+            await self._reaction_listing(payload.channel_id, payload.message_id)
+
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.user_id == self.config.owner_id:
+            await self._reaction_listing(payload.channel_id, payload.message_id)
+
+    async def on_raw_reaction_clear(self, payload: discord.RawReactionClearEvent) -> None:
+        await self._reaction_listing(payload.channel_id, payload.message_id)
+
+    async def on_raw_reaction_clear_emoji(self, payload: discord.RawReactionClearEmojiEvent) -> None:
+        await self._reaction_listing(payload.channel_id, payload.message_id)
+
+    async def _reaction_listing(self, channel_id: int, message_id: int) -> None:
+        async with self._publish_lock:
+            paths = posts_for(self.config.pages_dir, message_id)
+            if not paths:
+                return
+            try:
+                owner = await self.fetch_user(self.config.owner_id)
+                channel = await owner.create_dm()
+                if channel.id != channel_id:
+                    return
+                message = await channel.fetch_message(message_id)
+                if message.author.id != self.config.owner_id:
+                    return
+
+                changed = await asyncio.to_thread(set_listing, paths, listing_for(message))
+                if not changed:
+                    return
+                published = await asyncio.to_thread(
+                    commit_and_push, self.config.repo_dir, changed,
+                    f"Update listing for message {message_id}",
+                )
+                if not published:
+                    logger.error("message %s: listing publish failed", message_id)
+                    return
+                logger.info("message %s: listing updated (%s)", message_id, listing_for(message).name)
+            except discord.HTTPException as exc:
+                logger.error("message %s: failed to sync reactions: %s", message_id, exc)
+
+    async def _sync_listings(self) -> None:
+        async with self._publish_lock:
+            managed: dict[int, list[Path]] = {}
+            for path in self.config.pages_dir.glob("*.md"):
+                metadata = await asyncio.to_thread(post_metadata, path)
+                if metadata.get("type") != "link" or "unlisted" not in metadata:
+                    continue
+                managed.setdefault(int(metadata["message_id"]), []).append(path)
+            if not managed:
+                return
+
+            changed = []
+            try:
+                owner = await self.fetch_user(self.config.owner_id)
+                channel = await owner.create_dm()
+                async for message in channel.history(
+                    limit=None, after=discord.Object(id=min(managed) - 1), oldest_first=True
+                ):
+                    if message.author.id != self.config.owner_id or message.id not in managed:
+                        continue
+                    changed.extend(await asyncio.to_thread(
+                        set_listing, managed[message.id], listing_for(message)
+                    ))
+            except discord.HTTPException as exc:
+                logger.error("failed to sync reaction history: %s", exc)
+
+            if not changed:
+                return
+            published = await asyncio.to_thread(
+                commit_and_push, self.config.repo_dir, changed, "Sync article listings from reactions"
+            )
+            if not published:
+                logger.error("reaction history publish failed")
+
 
 def main() -> None:
     token = os.environ.get("DISCORD_BOT_TOKEN")
@@ -311,6 +445,7 @@ def main() -> None:
 
     intents = discord.Intents.default()
     intents.message_content = True
+    intents.dm_reactions = True
 
     client = ReadlogClient(config=config, intents=intents)
     client.run(token, log_level=logging.INFO, root_logger=True)
