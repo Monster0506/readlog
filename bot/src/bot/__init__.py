@@ -161,6 +161,24 @@ def publish_links(
     return commit_and_push(repo_dir, paths, f"add {len(paths)} link(s) from message {message_id}")
 
 
+def posts_for(pages_dir: Path, message_id: int) -> list[Path]:
+    single = pages_dir / f"{message_id}.md"
+    if single.exists():
+        return [single]
+    return sorted(pages_dir.glob(f"{message_id}-*.md"))
+
+
+def append_note(path: Path, note: str) -> None:
+    content = path.read_text(encoding="utf-8").rstrip()
+    path.write_text(f"{content}\n\n{note}\n", encoding="utf-8", newline="\n")
+
+
+def publish_note(repo_dir: Path, paths: list[Path], note: str, *, message_id: int) -> bool:
+    for path in paths:
+        append_note(path, note)
+    return commit_and_push(repo_dir, paths, f"add note from message {message_id}")
+
+
 async def react(message: discord.Message, emoji: str, reason: str) -> None:
     logger.info("message %s: reacting %s (%s)", message.id, emoji, reason)
     try:
@@ -212,6 +230,9 @@ class ReadlogClient(discord.Client):
 
         logger.info("incoming DM %s from %s: %r", message.id, message.author, message.content)
 
+        if await self._handle_reply(message):
+            return
+
         url_lines = extract_url_lines(message.content)
         if not url_lines:
             logger.info("ignoring %s: no links found", message.id)
@@ -250,6 +271,33 @@ class ReadlogClient(discord.Client):
             "message %s: published %d post(s) (title_missing=%s)", message.id, len(entries), any_title_missing
         )
         await react(message, REACTION_TITLE_MISSING if any_title_missing else REACTION_SUCCESS, "published")
+
+    async def _handle_reply(self, message: discord.Message) -> bool:
+        ref = message.reference
+        if ref is None or ref.type is not discord.MessageReferenceType.reply or ref.message_id is None:
+            return False
+
+        paths = posts_for(self.config.pages_dir, ref.message_id)
+        if not paths:
+            return False
+
+        note = message.content.strip()
+        if not note:
+            logger.info("message %s: empty reply to %s, ignoring", message.id, ref.message_id)
+            return True
+
+        async with self._publish_lock:
+            published = await asyncio.to_thread(
+                publish_note, self.config.repo_dir, paths, note, message_id=message.id
+            )
+
+        if not published:
+            await react(message, REACTION_ERROR, "note publish failed")
+            return True
+
+        logger.info("message %s: added note to %d post(s) of %s", message.id, len(paths), ref.message_id)
+        await react(message, REACTION_SUCCESS, "note added")
+        return True
 
 
 def main() -> None:
