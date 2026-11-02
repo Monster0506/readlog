@@ -167,7 +167,7 @@ def publish_links(
             message_id=message_id,
             jump_url=jump_url,
             body=pending.body,
-            listing=listing,
+            listing=Listing.HOME if has_note(pending.body) else listing,
         )
     paths = [pending.path for pending, _ in entries]
     return commit_and_push(repo_dir, paths, f"add {len(paths)} link(s) from message {message_id}")
@@ -189,7 +189,7 @@ def publish_note(repo_dir: Path, paths: list[Path], note: str, *, message_id: in
     for path in paths:
         append_note(path, note)
         if is_managed(path):
-            write_flags(path, {"replied": True, "unlisted": False})
+            write_listing(path, Listing.HOME)
     return commit_and_push(repo_dir, paths, f"add note from message {message_id}")
 
 
@@ -201,45 +201,53 @@ def post_metadata(path: Path) -> dict:
     return tomllib.loads(parts[1])
 
 
+def post_body(path: Path) -> str:
+    return path.read_text(encoding="utf-8").split("+++\n", 2)[-1]
+
+
+def has_note(body: str) -> bool:
+    url_line, _, rest = body.strip().partition("\n")
+    return bool(URL_RE.sub("", url_line).strip() or rest.strip())
+
+
 def is_managed(path: Path) -> bool:
     metadata = post_metadata(path)
     return metadata.get("type") == "link" and "unlisted" in metadata
 
 
-def write_flags(path: Path, flags: dict[str, bool]) -> None:
+def write_listing(path: Path, listing: Listing) -> None:
     content = path.read_text(encoding="utf-8")
     opening, frontmatter, body = content.split("+++\n", 2)
-    for key, value in flags.items():
-        line = f"{key}={str(value).lower()}"
-        frontmatter, count = re.subn(rf"(?m)^{key}[ \t]*=[^\n]*$", line, frontmatter, count=1)
-        if not count:
-            frontmatter += f"{line}\n"
+    frontmatter = re.sub(
+        r"(?m)^unlisted[ \t]*=[^\n]*$", f"unlisted={str(listing.value).lower()}", frontmatter, count=1
+    )
     path.write_text(f"{opening}+++\n{frontmatter}+++\n{body}", encoding="utf-8", newline="\n")
 
 
-def set_listing(paths: list[Path], listing: Listing) -> list[Path]:
+def set_listing(paths: list[Path], reacted: Listing) -> list[Path]:
     changed = []
     for path in paths:
         if not is_managed(path):
             continue
+        listing = Listing.HOME if has_note(post_body(path)) else reacted
         if post_metadata(path)["unlisted"] is listing.value:
             continue
 
-        write_flags(path, {"unlisted": listing.value})
+        write_listing(path, listing)
         changed.append(path)
     return changed
+
+
+def home_marker(paths: list[Path]) -> Listing:
+    if any(post_metadata(path).get("unlisted") is False for path in paths):
+        return Listing.HOME
+    return Listing.ALL_ONLY
 
 
 def listing_for(message: discord.Message) -> Listing:
     if any(reaction.count > int(reaction.me) for reaction in message.reactions):
         return Listing.HOME
     return Listing.ALL_ONLY
-
-
-def resolve_listing(message: discord.Message, paths: list[Path]) -> Listing:
-    if any(post_metadata(path).get("replied") is True for path in paths):
-        return Listing.HOME
-    return listing_for(message)
 
 
 async def react(message: discord.Message, emoji: str, reason: str) -> None:
@@ -344,7 +352,7 @@ class ReadlogClient(discord.Client):
             "message %s: published %d post(s) (title_missing=%s)", message.id, len(entries), any_title_missing
         )
         await react(message, REACTION_TITLE_MISSING if any_title_missing else REACTION_SUCCESS, "published")
-        if listing is Listing.HOME:
+        if home_marker([link.path for link in pending]) is Listing.HOME:
             await react(message, REACTION_HOME, "listed on home")
 
     async def _handle_reply(self, message: discord.Message) -> bool:
@@ -413,8 +421,8 @@ class ReadlogClient(discord.Client):
                 if message.author.id != self.config.owner_id:
                     return
 
-                listing = resolve_listing(message, paths)
-                changed = await asyncio.to_thread(set_listing, paths, listing)
+                reacted = listing_for(message)
+                changed = await asyncio.to_thread(set_listing, paths, reacted)
                 if changed:
                     published = await asyncio.to_thread(
                         commit_and_push, self.config.repo_dir, changed,
@@ -423,9 +431,9 @@ class ReadlogClient(discord.Client):
                     if not published:
                         logger.error("message %s: listing publish failed", message_id)
                         return
-                    logger.info("message %s: listing updated (%s)", message_id, listing.name)
+                    logger.info("message %s: listing updated (reactions: %s)", message_id, reacted.name)
 
-                await self._set_marker(message, listing)
+                await self._set_marker(message, home_marker(paths))
             except discord.HTTPException as exc:
                 logger.error("message %s: failed to sync reactions: %s", message_id, exc)
 
@@ -455,7 +463,7 @@ class ReadlogClient(discord.Client):
                 return
 
             changed = []
-            synced: list[tuple[discord.Message, Listing]] = []
+            synced: list[tuple[discord.Message, list[Path]]] = []
             try:
                 owner = await self.fetch_user(self.config.owner_id)
                 channel = await owner.create_dm()
@@ -464,9 +472,9 @@ class ReadlogClient(discord.Client):
                 ):
                     if message.author.id != self.config.owner_id or message.id not in managed:
                         continue
-                    listing = await asyncio.to_thread(resolve_listing, message, managed[message.id])
-                    changed.extend(await asyncio.to_thread(set_listing, managed[message.id], listing))
-                    synced.append((message, listing))
+                    paths = managed[message.id]
+                    changed.extend(await asyncio.to_thread(set_listing, paths, listing_for(message)))
+                    synced.append((message, paths))
             except discord.HTTPException as exc:
                 logger.error("failed to sync reaction history: %s", exc)
 
@@ -478,8 +486,8 @@ class ReadlogClient(discord.Client):
                     logger.error("reaction history publish failed")
                     return
 
-            for message, listing in synced:
-                await self._set_marker(message, listing)
+            for message, paths in synced:
+                await self._set_marker(message, await asyncio.to_thread(home_marker, paths))
 
 
 def main() -> None:
