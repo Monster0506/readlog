@@ -1,0 +1,16 @@
+[Unit]
+Description=readlog capture bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/readlog/bot
+EnvironmentFile=/home/%i/.config/readlog-bot.env
+ExecStart=/home/%i/.local/bin/uv run bot
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
