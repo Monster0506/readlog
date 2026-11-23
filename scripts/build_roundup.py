@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from _posts import Post, load_posts
 
@@ -21,18 +23,45 @@ def format_week_title(start: date, end: date) -> str:
     return f"Week of {start.strftime('%b')} {start.day} - {end.strftime('%b')} {end.day}, {end.year}"
 
 
-def render_roundup(posts: list[Post], *, start: date, end: date) -> str:
-    lines = [f"- [{post.title}]({post.permalink})" + (f" - {post.description}" if post.description else "") for post in posts]
+def end_of_day(epoch: int) -> int:
+    day_start = epoch - (epoch % 86400)
+    return day_start + 23 * 3600 + 59 * 60
 
-    end_epoch = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp())
+
+def domain_for(url: str | None) -> str:
+    host = urlparse(url or "").hostname or ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def has_annotation(post: Post) -> bool:
+    if post.url and post.description.startswith(post.url):
+        return bool(post.description[len(post.url) :].strip())
+    return bool(post.description.strip())
+
+
+def render_roundup(posts: list[Post], *, start: date, end: date) -> str:
+    by_day: dict[date, list[Post]] = defaultdict(list)
+    for post in posts:
+        by_day[post.date].append(post)
+
+    sections = []
+    for day in sorted(by_day):
+        lines = [f"## {day.strftime('%A')} · {day.strftime('%B')} {day.day}"]
+        for post in by_day[day]:
+            when = datetime.fromtimestamp(post.epoch, tz=timezone.utc).strftime("%H:%M")
+            marker = " •" if has_annotation(post) else ""
+            lines.append(f"- [{post.title}]({post.permalink}) - {domain_for(post.url)}, {when}{marker}")
+        sections.append("\n".join(lines))
+
+    roundup_epoch = end_of_day(max(post.epoch for post in posts))
     frontmatter = (
         "+++\n"
         'type="roundup"\n'
         f'title="{format_week_title(start, end)}"\n'
-        f"date={end_epoch}\n"
+        f"date={roundup_epoch}\n"
         "+++\n\n"
     )
-    return frontmatter + "\n".join(lines) + "\n"
+    return frontmatter + "\n\n".join(sections) + "\n"
 
 
 def main() -> int:
@@ -69,7 +98,7 @@ def main() -> int:
         return 0
 
     output = args.pages_dir / f"{start.isoformat()}.md"
-    output.write_text(render_roundup(week_posts, start=start, end=end), encoding="utf-8")
+    output.write_text(render_roundup(week_posts, start=start, end=end), encoding="utf-8", newline="")
     print(f"Wrote {len(week_posts)} link(s) to {output}")
     return 0
 
